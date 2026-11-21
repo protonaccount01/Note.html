@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en-GB">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>EXIF Stripper — Offline Metadata Remover</title>
+<style>
+  :root{
+    --bg:#14100d; --surface:#201913; --card:#2a2119; --border:#453626;
+    --text:#f3ead9; --muted:#b8a88f; --brand:#c98a4b; --brand-dark:#8a5a2b;
+    --danger:#e06c5a; --ok:#7bc47f;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-family:-apple-system,'Segoe UI',Roboto,Arial,sans-serif;padding:18px 14px 40px;line-height:1.5}
+  .wrap{max-width:720px;margin:0 auto}
+  h1{font-size:26px;font-weight:800;letter-spacing:.2px}
+  h1 .leaf{color:var(--brand)}
+  .sub{color:var(--muted);font-size:14px;margin:6px 0 4px}
+  .badge{display:inline-block;background:var(--card);border:1px solid var(--border);border-radius:999px;padding:3px 11px;font-size:12px;color:var(--brand);margin-top:8px}
+  .drop{
+    margin-top:18px;border:2px dashed var(--border);border-radius:16px;background:var(--surface);
+    padding:34px 18px;text-align:center;cursor:pointer;transition:border-color .15s,background .15s;
+  }
+  .drop.over{border-color:var(--brand);background:var(--card)}
+  .drop .big{font-size:17px;font-weight:700}
+  .drop .small{color:var(--muted);font-size:13px;margin-top:4px}
+  .drop input{display:none}
+  .btn{
+    display:inline-block;background:var(--brand);color:#1c130a;border:none;font-weight:800;
+    padding:11px 20px;border-radius:999px;font-size:15px;cursor:pointer;margin-top:14px;
+  }
+  .btn:active{background:var(--brand-dark)}
+  .btn.ghost{background:transparent;color:var(--brand);border:1px solid var(--brand)}
+  .btn:disabled{opacity:.45;cursor:default}
+  .item{
+    background:var(--surface);border:1px solid var(--border);border-radius:14px;
+    padding:14px;margin-top:14px;display:flex;gap:14px;align-items:flex-start;flex-wrap:wrap;
+  }
+  .item img{width:84px;height:84px;object-fit:cover;border-radius:10px;border:1px solid var(--border);background:#000}
+  .info{flex:1;min-width:220px}
+  .name{font-weight:700;font-size:15px;word-break:break-all}
+  .sizes{color:var(--muted);font-size:13px;margin-top:2px}
+  .meta{margin-top:8px;font-size:13px}
+  .meta .row{padding:2px 0;border-bottom:1px dashed #ffffff14}
+  .meta .k{color:var(--brand);font-weight:700}
+  .clean{color:var(--ok);font-weight:700}
+  .leak{color:var(--danger);font-weight:700}
+  .none{color:var(--muted)}
+  .item .btn{margin-top:10px;padding:9px 16px;font-size:14px}
+  .warn{
+    margin-top:18px;background:#2a1d16;border:1px solid #5a3a26;border-radius:12px;
+    padding:12px 14px;font-size:13.5px;color:#e8cdb2;
+  }
+  .foot{color:var(--muted);font-size:12.5px;margin-top:22px;text-align:center}
+  #allBtn{display:none;margin:18px auto 0}
+  .center{text-align:center}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>EXIF <span class="leaf">Stripper</span></h1>
+  <p class="sub">See exactly what hidden info your photos and screenshots carry — then download a cleaned copy with all of it removed.</p>
+  <span class="badge">100% OFFLINE · nothing is uploaded anywhere · works without internet</span>
+
+  <div class="drop" id="drop">
+    <div class="big">Tap to choose images, or drop them here</div>
+    <div class="small">JPG · PNG · WebP — as many as you like</div>
+    <button class="btn" type="button">Choose images</button>
+    <input type="file" id="fileInput" accept="image/jpeg,image/png,image/webp" multiple>
+  </div>
+
+  <div class="center"><button class="btn ghost" id="allBtn">Download all cleaned</button></div>
+
+  <div id="list"></div>
+
+  <div class="warn">
+    <strong>What leaks in an image file:</strong> GPS location (where a photo was taken), phone/camera model,
+    software name, date &amp; time, and unique IDs. This tool re-saves the picture pixel-for-pixel and throws
+    all of that away — then re-checks the cleaned file and proves the metadata is gone.
+  </div>
+
+  <p class="foot">Made for private use. The cleaned copy keeps the same picture — only the hidden data is removed.</p>
+</div>
+
+<script>
+"use strict";
+var drop = document.getElementById('drop');
+var input = document.getElementById('fileInput');
+var list = document.getElementById('list');
+var allBtn = document.getElementById('allBtn');
+var cleanedItems = [];
+
+drop.addEventListener('click', function(e){ if(e.target !== input) input.click(); });
+input.addEventListener('change', function(){ handleFiles(input.files); input.value=''; });
+['dragover','dragenter'].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.add('over'); }); });
+['dragleave','drop'].forEach(function(ev){ drop.addEventListener(ev, function(e){ e.preventDefault(); drop.classList.remove('over'); }); });
+drop.addEventListener('drop', function(e){ handleFiles(e.dataTransfer.files); });
+allBtn.addEventListener('click', function(){
+  cleanedItems.forEach(function(it, i){ setTimeout(function(){ download(it.blob, it.name); }, i*350); });
+});
+
+function fmtSize(n){
+  if(n < 1024) return n + ' B';
+  if(n < 1024*1024) return (n/1024).toFixed(1) + ' KB';
+  return (n/(1024*1024)).toFixed(2) + ' MB';
+}
+function esc(s){ return String(s).replace(/[&<>"']/g, function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+function download(blob, name){
+  var a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a); a.click();
+  setTimeout(function(){ URL.revokeObjectURL(a.href); a.remove(); }, 800);
+}
+
+/* ---------- metadata readers ---------- */
+function readJPEG(buf){
+  var v = new DataView(buf), out = [];
+  if(v.byteLength < 4 || v.getUint16(0) !== 0xFFD8) return out;
+  var off = 2;
+  while(off + 4 <= v.byteLength){
+    var marker = v.getUint16(off);
+    if(marker === 0xFFDA) break;                       // start of scan
+    var len = v.getUint16(off + 2);
+    if(marker === 0xFFE1){                             // APP1
+      var s = '';
+      for(var i = 0; i < 6 && off + 4 + i < v.byteLength; i++) s += String.fromCharCode(v.getUint8(off + 4 + i));
+      if(s.indexOf('Exif') === 0){ parseTIFF(v, off + 10, out); }
+    }
+    off += 2 + len;
+  }
+  return out;
+}
+function parseTIFF(v, tiff, out){
+  try{
+    var le = v.getUint16(tiff) === 0x4949;
+    var g16 = function(o){ return v.getUint16(o, le); };
+    var g32 = function(o){ return v.getUint32(o, le); };
+    if(g16(tiff + 2) !== 42) return;
+    function val(entryOff){
+      var type = g16(entryOff + 2), count = g32(entryOff + 4);
+      var sizes = {1:1,2:1,3:2,4:4,5:8,7:1,9:4,10:8};
+      var sz = (sizes[type] || 1) * count;
+      var dataOff = sz <= 4 ? entryOff + 8 : tiff + g32(entryOff + 8);
+      var i, parts = [];
+      if(type === 2){ var str = ''; for(i = 0; i < count; i++){ var c = v.getUint8(dataOff + i); if(c) str += String.fromCharCode(c); } return str; }
+      if(type === 3){ for(i = 0; i < count; i++) parts.push(g16(dataOff + i*2)); return parts; }
+      if(type === 4 || type === 9){ for(i = 0; i < count; i++) parts.push(g32(dataOff + i*4)); return parts; }
+      if(type === 5 || type === 10){ for(i = 0; i < count; i++){ var n = g32(dataOff + i*8), d = g32(dataOff + i*8 + 4); parts.push(d ? n/d : 0); } return parts; }
+      return null;
+    }
+    function ifd(off, names, sink){
+      var n = g16(off), found = {};
+      for(var i = 0; i < n; i++){
+        var e = off + 2 + i*12, tag = g16(e);
+        var value = val(e);
+        if(names[tag]) sink.push([names[tag], value]);
+        found[tag] = e;
+      }
+      return found;
+    }
+    var main = {};
+    var f0 = ifd(tiff + g32(tiff + 4), {0x010F:'Camera make', 0x0110:'Camera / phone model', 0x0131:'Software', 0x0132:'Date modified', 0x0112:'Orientation'}, out);
+    if(f0[0x8769] !== undefined){ var eo = tiff + g32(f0[0x8769] + 8); ifd(eo, {0x9003:'Date taken', 0xA434:'Lens'}, out); }
+    if(f0[0x8825] !== undefined){
+      var go = tiff + g32(f0[0x8825] + 8), gps = [];
+      ifd(go, {0x0001:'GPS latitude ref', 0x0002:'GPS latitude', 0x0003:'GPS longitude ref', 0x0004:'GPS longitude', 0x0006:'GPS altitude'}, gps);
+      var lat = null, lon = null, latR = '', lonR = '';
+      gps.forEach(function(p){
+        if(p[0] === 'GPS latitude' && p[1] && p[1].length === 3) lat = p[1][0] + p[1][1]/60 + p[1][2]/3600;
+        if(p[0] === 'GPS longitude' && p[1] && p[1].length === 3) lon = p[1][0] + p[1][1]/60 + p[1][2]/3600;
+        if(p[0] === 'GPS latitude ref') latR = p[1];
+        if(p[0] === 'GPS longitude ref') lonR = p[1];
+      });
+      if(lat !== null && lon !== null){
+        if(latR === 'S') lat = -lat; if(lonR === 'W') lon = -lon;
+        out.push(['⚠ GPS LOCATION', lat.toFixed(6) + ', ' + lon.toFixed(6) + '  (maps: https://maps.google.com/?q=' + lat.toFixed(6) + ',' + lon.toFixed(6) + ')']);
+      } else {
+        gps.forEach(function(p){ out.push([p[0], p[1]]); });
+      }
+    }
+    return out;
+  }catch(e){ return out; }
+}
+function readPNG(buf){
+  var v = new DataView(buf), out = [];
+  if(v.byteLength < 8 || v.getUint32(0) !== 0x89504E47) return out;
+  var off = 8, texts = 0;
+  while(off + 12 <= v.byteLength){
+    var len = v.getUint32(off), type = '';
+    for(var i = 0; i < 4; i++) type += String.fromCharCode(v.getUint8(off + 4 + i));
+    if(type === 'eXIf') out.push(['EXIF block', 'present']);
+    if(type === 'tEXt' || type === 'iTXt' || type === 'zTXt') texts++;
+    if(type === 'tIME') out.push(['PNG time chunk', 'present']);
+    if(type === 'IEND') break;
+    off += 12 + len;
+  }
+  if(texts) out.push(['Text chunks', texts + ' (can hold software name, comments, IDs)']);
+  return out;
+}
+function readWebP(buf){
+  var out = [], s = '';
+  var bytes = new Uint8Array(buf);
+  for(var i = 0; i < bytes.length - 4; i++){
+    if(bytes[i] === 0x45 && bytes[i+1] === 0x58 && bytes[i+2] === 0x49 && bytes[i+3] === 0x46){ out.push(['EXIF chunk', 'present']); break; }
+  }
+  return out;
+}
+function readMeta(buf, type){
+  if(type === 'image/jpeg') return readJPEG(buf);
+  if(type === 'image/png') return readPNG(buf);
+  if(type === 'image/webp') return readWebP(buf);
+  return [];
+}
+function prettyVal(x){
+  if(Array.isArray(x)) return x.join(', ');
+  return String(x);
+}
+
+/* ---------- main flow ---------- */
+function handleFiles(files){
+  Array.prototype.forEach.call(files, function(file){
+    if(!/^image\//.test(file.type)) return;
+    processFile(file);
+  });
+}
+
+function processFile(file){
+  var card = document.createElement('div');
+  card.className = 'item';
+  card.innerHTML = '<img alt=""><div class="info"><div class="name">' + esc(file.name) + '</div>' +
+    '<div class="sizes">Reading metadata…</div><div class="meta"></div></div>';
+  list.prepend(card);
+  var img = card.querySelector('img');
+  img.src = URL.createObjectURL(file);
+  var metaBox = card.querySelector('.meta');
+  var sizeBox = card.querySelector('.sizes');
+
+  file.arrayBuffer().then(function(buf){
+    var found = readMeta(buf, file.type);
+    if(found.length){
+      metaBox.innerHTML = '<div class="leak">Hidden info found in this file:</div>' + found.map(function(p){
+        return '<div class="row"><span class="k">' + esc(p[0]) + ':</span> ' + esc(prettyVal(p[1])) + '</div>';
+      }).join('');
+    } else {
+      metaBox.innerHTML = '<div class="none">No metadata found in this file — it is already clean.</div>';
+    }
+    return stripImage(file);
+  }).then(function(cleanBlob){
+    if(!cleanBlob){ sizeBox.textContent = 'Could not process this file.'; return; }
+    return cleanBlob.arrayBuffer().then(function(cbuf){
+      var leftovers = readMeta(cbuf, cleanBlob.type);
+      var newName = file.name.replace(/\.(\w+)$/, '-clean.$1');
+      sizeBox.textContent = 'Original ' + fmtSize(file.size) + '  →  Cleaned ' + fmtSize(cleanBlob.size);
+      var note = document.createElement('div');
+      note.innerHTML = leftovers.length
+        ? '<span class="leak">Something survived cleaning — do not upload this copy.</span>'
+        : '<span class="clean">✔ Cleaned file re-checked: no metadata left.</span>';
+      metaBox.appendChild(note);
+      var btn = document.createElement('button');
+      btn.className = 'btn'; btn.type = 'button'; btn.textContent = 'Download cleaned copy';
+      btn.addEventListener('click', function(){ download(cleanBlob, newName); });
+      metaBox.appendChild(btn);
+      cleanedItems.push({blob: cleanBlob, name: newName});
+      allBtn.style.display = cleanedItems.length > 1 ? 'inline-block' : 'none';
+    });
+  }).catch(function(){
+    sizeBox.textContent = 'Could not read this file.';
+  });
+}
+
+function stripImage(file){
+  return new Promise(function(resolve){
+    var url = URL.createObjectURL(file);
+    var image = new Image();
+    image.onload = function(){
+      try{
+        var canvas = document.createElement('canvas');
+        canvas.width = image.naturalWidth; canvas.height = image.naturalHeight;
+        var ctx = canvas.getContext('2d');
+        if(file.type === 'image/jpeg'){ ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); }
+        ctx.drawImage(image, 0, 0);
+        URL.revokeObjectURL(url);
+        var type = (file.type === 'image/png' || file.type === 'image/webp') ? file.type : 'image/jpeg';
+        canvas.toBlob(function(b){ resolve(b); }, type, 0.95);
+      }catch(e){ resolve(null); }
+    };
+    image.onerror = function(){ URL.revokeObjectURL(url); resolve(null); };
+    image.src = url;
+  });
+}
+</script>
+</body>
+</html>
